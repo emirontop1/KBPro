@@ -1,0 +1,46 @@
+name: Build APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v3
+      - run: |
+          python3 << 'PYEOF'
+          import struct, zlib, os
+          def make_png(size, color=(79, 142, 247)):
+              def chunk(name, data):
+                  c = zlib.crc32(name + data) & 0xffffffff
+                  return struct.pack('>I', len(data)) + name + data + struct.pack('>I', c)
+              raw = b''
+              for y in range(size):
+                  raw += b'\x00'
+                  for x in range(size):
+                      raw += bytes(color)
+              png = b'\x89PNG\r\n\x1a\n'
+              png += chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
+              png += chunk(b'IDAT', zlib.compress(raw))
+              png += chunk(b'IEND', b'')
+              return png
+          for density, size in [("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)]:
+              folder = f"app/src/main/res/mipmap-{density}"
+              os.makedirs(folder, exist_ok=True)
+              for name in ["ic_launcher.png", "ic_launcher_round.png"]:
+                  with open(f"{folder}/{name}", "wb") as f:
+                      f.write(make_png(size))
+          PYEOF
+      - run: gradle :app:assembleDebug
+      - run: |
+          RELEASE=$(curl -sf -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Content-Type: application/json" -d '{"tag_name":"v1.0","name":"KB Pro v1.0","body":"Advanced keyboard with auto-convert & banned words filter","draft":false,"prerelease":false}' "https://api.github.com/repos/${{ github.repository }}/releases")
+          UPLOAD_URL=$(echo "$RELEASE" | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_url'].split('{')[0])")
+          curl -sf -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Content-Type: application/vnd.android.package-archive" --data-binary "@app/build/outputs/apk/debug/app-debug.apk" "${UPLOAD_URL}?name=KBPro.apk"
